@@ -1,0 +1,120 @@
+const crypto = require('crypto');
+const Razorpay = require('razorpay');
+const Order = require('../models/Order');
+const orderService = require('./orderService');
+const emailService = require('./emailService');
+const { fail, validateBody } = require('../utils/validation');
+
+let client;
+let testClient;
+
+function keyId() {
+  return process.env.RAZORPAY_KEY_ID;
+}
+
+function keySecret() {
+  return process.env.RAZORPAY_KEY_SECRET;
+}
+
+function webhookSecret() {
+  return process.env.RAZORPAY_WEBHOOK_SECRET;
+}
+
+function getClient() {
+  if (testClient) return testClient;
+  if (!keyId() || !keySecret()) fail('Razorpay is not configured', 503);
+  if (!client) client = new Razorpay({ key_id: keyId(), key_secret: keySecret() });
+  return client;
+}
+
+function amountPaise(order) {
+  const paise = Math.round(Number(order.subtotal) * 100);
+  if (!Number.isSafeInteger(paise) || paise < 100) fail('Order amount is invalid for online payment');
+  return paise;
+}
+
+function verifySignature(orderId, paymentId, signature) {
+  const expected = crypto.createHmac('sha256', keySecret()).update(`${orderId}|${paymentId}`).digest('hex');
+  if (expected.length !== signature.length) return false;
+  return crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature));
+}
+
+async function createRazorpayOrder(body) {
+  validateBody(body, ['userId', 'items']);
+  const { user, items, currency, subtotal } = await orderService.buildOrderData(body);
+  if (currency !== 'INR') fail('Razorpay online payment currently supports INR only');
+  const order = await Order.create({
+    user: user._id,
+    customer: { name: user.name, email: user.email, phone: user.phone },
+    shippingAddress: user.address.toObject(),
+    items,
+    currency,
+    subtotal,
+    status: 'pending',
+    paymentMethod: 'online',
+    payment: { status: 'pending', provider: 'razorpay' },
+  });
+  const razorpayOrder = await getClient().orders.create({
+    amount: amountPaise(order),
+    currency,
+    receipt: String(order._id),
+    notes: { localOrderId: String(order._id), customerEmail: order.customer.email },
+  });
+  order.payment.providerOrderId = razorpayOrder.id;
+  await order.save();
+  emailService.sendOrderCreatedEmail(order).catch(error => {
+    console.error(`Order created email failed for ${order._id}: ${error.message}`);
+  });
+  return { flag: true, data: { order, razorpay: { keyId: keyId(), orderId: razorpayOrder.id, amount: razorpayOrder.amount, currency: razorpayOrder.currency } } };
+}
+
+async function verifyPayment(body) {
+  validateBody(body, ['razorpay_order_id', 'razorpay_payment_id', 'razorpay_signature']);
+  for (const key of ['razorpay_order_id', 'razorpay_payment_id', 'razorpay_signature']) if (typeof body[key] !== 'string' || !body[key].trim()) fail(`${key} is required`);
+  if (!keySecret()) fail('Razorpay is not configured', 503);
+  if (!verifySignature(body.razorpay_order_id, body.razorpay_payment_id, body.razorpay_signature)) fail('Invalid Razorpay payment signature', 400);
+  const order = await Order.findOne({ 'payment.provider': 'razorpay', 'payment.providerOrderId': body.razorpay_order_id });
+  if (!order) fail('Order not found', 404);
+  order.payment.status = 'paid';
+  order.payment.transactionId = body.razorpay_payment_id;
+  if (!order.payment.paidAt) order.payment.paidAt = new Date();
+  order.status = 'approved';
+  await order.save();
+  emailService.sendOrderStatusEmail(order).catch(error => {
+    console.error(`Order status email failed for ${order._id}: ${error.message}`);
+  });
+  return { flag: true, data: order };
+}
+
+function validateWebhook(rawBody, signature) {
+  if (!webhookSecret()) fail('Razorpay webhook is not configured', 503);
+  if (typeof signature !== 'string' || !signature) fail('Missing Razorpay webhook signature', 400);
+  const expected = crypto.createHmac('sha256', webhookSecret()).update(rawBody).digest('hex');
+  if (expected.length !== signature.length || !crypto.timingSafeEqual(Buffer.from(expected), Buffer.from(signature))) fail('Invalid Razorpay webhook signature', 400);
+}
+
+async function handleWebhook(rawBody, signature) {
+  validateWebhook(rawBody, signature);
+  const event = JSON.parse(rawBody.toString('utf8'));
+  const payment = event.payload?.payment?.entity;
+  if (!payment?.order_id) return { received: true };
+  const order = await Order.findOne({ 'payment.provider': 'razorpay', 'payment.providerOrderId': payment.order_id });
+  if (!order) return { received: true };
+  if (event.event === 'payment.captured' || payment.status === 'captured') {
+    order.payment.status = 'paid';
+    order.payment.transactionId = payment.id || order.payment.transactionId;
+    if (!order.payment.paidAt) order.payment.paidAt = new Date((payment.created_at || Math.floor(Date.now() / 1000)) * 1000);
+    order.status = 'approved';
+  } else if (event.event === 'payment.failed' || payment.status === 'failed') {
+    order.payment.status = 'failed';
+    order.payment.transactionId = payment.id || order.payment.transactionId;
+  }
+  await order.save();
+  return { received: true };
+}
+
+function setTestClient(value) {
+  testClient = value;
+}
+
+module.exports = { createRazorpayOrder, verifyPayment, handleWebhook, setTestClient };

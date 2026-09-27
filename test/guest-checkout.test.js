@@ -1,0 +1,147 @@
+const { test } = require('node:test');
+const assert = require('node:assert/strict');
+const mongoose = require('mongoose');
+const User = require('../src/models/User');
+const Product = require('../src/models/Product');
+const Order = require('../src/models/Order');
+const emailService = require('../src/services/emailService');
+const app = require('../src/app');
+const address = () => ({ line1: '12 MG Road', city: 'Bengaluru', state: 'Karnataka', postalCode: '560001', country: 'IN' });
+
+test('guest schema requires contact/address without a password', async () => {
+  const base = { name: 'Guest', email: 'guest@example.com', phone: '+91 9876543210', role: 'guestUser', address: address() };
+  await new User(base).validate();
+  for (const patch of [{ phone: '' }, { email: '' }, { address: undefined }, { address: { line1: 'Incomplete' } }]) await assert.rejects(new User({ ...base, ...patch }).validate());
+  await assert.rejects(new User({ ...base, role: 'retailUser' }).validate());
+});
+
+test('guest registration and checkout preserve address and use server-side retail prices', async t => {
+  const users = new Map(), orders = [];
+  const sentEmails = [];
+  emailService.setTestSender(async message => { sentEmails.push(message); return { messageId: String(sentEmails.length) }; });
+  t.after(() => emailService.setTestSender(null));
+  const attach = user => { user.save = async () => { await user.validate(); users.set(String(user._id), user.toObject()); return user; }; return user; };
+  t.mock.method(User, 'create', async data => {
+    const user = new User(data);
+    if ([...users.values()].some(u => u.email === user.email)) throw Object.assign(new Error('duplicate'), { code: 11000 });
+    return attach(user).save();
+  });
+  t.mock.method(User, 'findById', async id => users.has(String(id)) ? attach(User.hydrate(users.get(String(id)))) : null);
+  t.mock.method(User, 'findOne', filter => ({ select: async () => { const user = [...users.values()].find(u => u.email === filter.email); return user ? User.hydrate(user) : null; } }));
+  const product = new Product({ _id: new mongoose.Types.ObjectId(), name: 'Toy', sku: 'TOY-1', category: new mongoose.Types.ObjectId(), productType: 'Toy', images: [{ url: 'https://example.com/toy.jpg' }], retailPrice: 19.99, stockQuantity: 10 });
+  t.mock.method(Product, 'find', async filter => filter._id.$in.some(id => id.toLowerCase() === String(product._id)) ? [product] : []);
+  const attachOrder = order => {
+    order.save = async () => { await order.validate(); return order; };
+    return order;
+  };
+  t.mock.method(Order, 'create', async data => { const order = attachOrder(new Order(data)); await order.validate(); orders.push(order); return order; });
+  t.mock.method(Order, 'findById', async id => orders.find(order => String(order._id) === String(id)) || null);
+  const server = app.listen(0, '127.0.0.1');
+  t.after(() => { server.close(); server.closeAllConnections(); });
+  await new Promise((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });
+  const base = `http://127.0.0.1:${server.address().port}/api`;
+  async function call(path, body, method = 'POST') {
+    const options = { method, headers: { 'content-type': 'application/json' } };
+    if (body !== undefined) options.body = JSON.stringify(body);
+    const res = await fetch(base + path, options);
+    return { status: res.status, body: await res.json() };
+  }
+  const guest = { name: 'Customer', email: ' GUEST@example.com ', phone: '+91 9876543210', address: address() };
+  for (const patch of [{ phone: undefined }, { phone: 'abc' }, { email: undefined }, { email: 'bad' }, { address: undefined }, { address: { line1: 'Incomplete' } }, { role: 'admin' }, { password: 'unexpected' }]) {
+    assert.equal((await call('/users/guest', { ...guest, ...patch })).status, 400);
+  }
+  const created = await call('/users/guest', guest);
+  assert.equal(created.status, 201);
+  assert.equal(created.body.flag, true);
+  assert.equal(created.body.data.role, 'guestUser');
+  assert.equal(created.body.data.email, 'guest@example.com');
+  assert.equal(created.body.data.passwordHash, undefined);
+  const userId = created.body.data._id;
+  assert.equal((await call('/users/guest', guest)).status, 409);
+  assert.equal(users.size, 1);
+  assert.equal((await call('/auth/login', { email: 'guest@example.com', password: 'anything' })).status, 401);
+  const orderBody = { userId, paymentMethod: 'cod', items: [{ productId: String(product._id), quantity: 3 }] };
+  const result = await call('/orders', orderBody);
+  assert.equal(result.status, 201);
+  assert.equal(result.body.data.user, userId);
+  assert.equal(result.body.data.subtotal, 59.97);
+  assert.equal(result.body.data.items[0].unitPrice, 19.99);
+  assert.equal(result.body.data.customer.phone, guest.phone);
+  assert.deepEqual(result.body.data.shippingAddress, { ...address(), line2: '' });
+  assert.equal(result.body.data.status, 'pending');
+  assert.equal(result.body.data.statusReason, '');
+  assert.equal(result.body.data.paymentMethod, 'cod');
+  assert.deepEqual(result.body.data.payment, { status: 'pending', provider: null, providerOrderId: null, transactionId: null, paidAt: null });
+  assert.equal(sentEmails[0].to, 'guest@example.com');
+  assert.match(sentEmails[0].subject, /Thank you for your order/);
+  assert.match(sentEmails[0].text, /Toy \(TOY-1\) x 3 - INR 59\.97/);
+  assert.match(sentEmails[0].text, /Delivery Address:/);
+  for (const paymentMethod of [undefined, null, '', 'card', 'online']) {
+    assert.equal((await call('/orders', { ...orderBody, paymentMethod })).status, 400);
+  }
+  assert.equal((await call('/orders', { ...orderBody, payment: { status: 'paid', transactionId: 'fake' } })).status, 400);
+  assert.equal(orders.length, 1);
+  const onlineOrder = new Order({ ...orders[0].toObject(), paymentMethod: 'online', payment: { status: 'pending', provider: 'future-provider', providerOrderId: 'provider-order-1' } });
+  await onlineOrder.validate();
+  onlineOrder.payment.status = 'invalid';
+  await assert.rejects(onlineOrder.validate());
+
+  const orderId = String(orders[0]._id);
+  const pendingInvoice = await fetch(base + '/orders/' + orderId + '/invoice');
+  assert.equal(pendingInvoice.status, 409);
+  assert.equal((await call('/orders/' + orderId + '/status', { status: 'approved' }, 'PATCH')).status, 200);
+  assert.equal(orders[0].status, 'approved');
+  assert.equal(orders[0].statusReason, '');
+  assert.equal(sentEmails.at(-1).to, 'guest@example.com');
+  assert.match(sentEmails.at(-1).subject, /approved/);
+  assert.deepEqual(orders[0].logistics.toObject(), { logisticsId: '', logisticsName: '', trackingUrl: '', notes: '' });
+  assert.equal((await call('/orders/' + orderId + '/status', { status: 'shipped' }, 'PATCH')).status, 400);
+  assert.equal((await call('/orders/' + orderId + '/status', { status: 'shipped', logistics: { logisticsId: 'AWB123', logisticsName: 'Blue Dart', trackingUrl: 'ftp://bad.example.com' } }, 'PATCH')).status, 400);
+  assert.equal((await call('/orders/' + orderId + '/status', { status: 'shipped', logistics: { logisticsId: 'AWB123', logisticsName: 'Blue Dart', trackingUrl: 'https://tracking.example.com/AWB123', notes: 'Packed in one box' } }, 'PATCH')).status, 200);
+  assert.equal(orders[0].status, 'shipped');
+  assert.deepEqual(orders[0].logistics.toObject(), { logisticsId: 'AWB123', logisticsName: 'Blue Dart', trackingUrl: 'https://tracking.example.com/AWB123', notes: 'Packed in one box' });
+  const invoice = await fetch(base + '/orders/' + orderId + '/invoice');
+  assert.equal(invoice.status, 200);
+  assert.equal(invoice.headers.get('content-type'), 'application/pdf');
+  assert.match(invoice.headers.get('content-disposition'), /^attachment; filename="invoice-/);
+  const invoiceBody = Buffer.from(await invoice.arrayBuffer());
+  assert.equal(invoiceBody.subarray(0, 4).toString(), '%PDF');
+  assert.equal((await call('/orders/' + orderId + '/status', { status: 'delivered' }, 'PATCH')).status, 200);
+  assert.equal(orders[0].status, 'delivered');
+  assert.equal(orders[0].payment.status, 'paid');
+  assert.ok(orders[0].payment.paidAt instanceof Date);
+  assert.deepEqual(orders[0].logistics.toObject(), { logisticsId: 'AWB123', logisticsName: 'Blue Dart', trackingUrl: 'https://tracking.example.com/AWB123', notes: 'Packed in one box' });
+  assert.match(sentEmails.at(-1).subject, /delivered/);
+  assert.match(sentEmails.at(-1).text, /Logistics ID: AWB123/);
+  assert.equal((await call('/orders/' + orderId + '/status', { status: 'returned' }, 'PATCH')).status, 400);
+  assert.equal((await call('/orders/' + orderId + '/status', { status: 'cancelled', reason: 'Customer requested cancellation' }, 'PATCH')).status, 200);
+  assert.equal(orders[0].status, 'cancelled');
+  assert.equal(orders[0].statusReason, 'Customer requested cancellation');
+  assert.deepEqual(orders[0].logistics.toObject(), { logisticsId: '', logisticsName: '', trackingUrl: '', notes: '' });
+  assert.equal((await call('/orders/' + orderId + '/status', { status: 'pending' }, 'PATCH')).status, 200);
+  assert.equal(orders[0].statusReason, '');
+  assert.equal((await call('/orders/' + orderId + '/status', { status: 'bad' }, 'PATCH')).status, 400);
+  assert.equal((await call('/orders/000000000000000000000000/status', { status: 'approved' }, 'PATCH')).status, 404);
+  assert.equal((await call('/orders/bad/status', { status: 'approved' }, 'PATCH')).status, 400);
+  assert.equal((await call('/orders/' + orderId, undefined, 'GET')).body.data.status, 'pending');
+
+  assert.equal((await call('/users/' + userId, { address: { ...address(), line1: 'New address' } }, 'PATCH')).status, 200);
+  assert.equal(orders[0].shippingAddress.line1, '12 MG Road');
+  assert.equal((await call('/orders', { ...orderBody, subtotal: 1 })).status, 400);
+  assert.equal((await call('/orders', { ...orderBody, items: [{ ...orderBody.items[0], price: 1 }] })).status, 400);
+  assert.equal((await call('/orders', { ...orderBody, items: [] })).status, 400);
+  assert.equal((await call('/orders', { ...orderBody, items: [orderBody.items[0], orderBody.items[0]] })).status, 400);
+  assert.equal((await call('/orders', { ...orderBody, items: [{ ...orderBody.items[0], quantity: 11 }] })).status, 409);
+  assert.equal((await call('/orders', { ...orderBody, items: [{ productId: '000000000000000000000000', quantity: 1 }] })).status, 404);
+  product.isActive = false;
+  assert.equal((await call('/orders', orderBody)).status, 409);
+  product.isActive = true; product.isRetail = false;
+  assert.equal((await call('/orders', orderBody)).status, 409);
+  product.isRetail = true;
+  users.get(userId).isActive = false;
+  assert.equal((await call('/orders', orderBody)).status, 403);
+  users.get(userId).isActive = true; users.get(userId).role = 'admin';
+  assert.equal((await call('/orders', orderBody)).status, 403);
+  assert.equal((await call('/orders', { ...orderBody, userId: '000000000000000000000000' })).status, 404);
+  assert.equal(orders.length, 1);
+});
