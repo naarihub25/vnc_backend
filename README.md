@@ -14,7 +14,18 @@ npm install
 cp .env.example .env # Only if .env does not exist
 ```
 
-Configure `MONGODB_URI` and `MONGODB_DB` in `.env`, then run `npm run dev` or `npm start`. PORT defaults to 3000. Startup waits for MongoDB and the unique email index. No JWT secret is needed.
+Start MongoDB on the same server as the backend, listening on `127.0.0.1:27017`. The default configuration in `.env` is:
+
+```dotenv
+MONGODB_URI=mongodb://127.0.0.1:27017/vnuc
+MONGODB_DB=vnuc
+```
+
+Run `npm run dev` for development or `npm start` for release. PORT defaults to 3000. Startup waits for MongoDB and the unique email index. No JWT secret is needed.
+
+The backend defaults to local MongoDB when `MONGODB_URI` is unset. Update any deployment environment override that still points to Atlas. The frontend connects to the backend API; only the backend connects to MongoDB. Keep MongoDB bound to the loopback interface for this same-server setup. If MongoDB authentication is enabled, set the credentials and appropriate `authSource` in `MONGODB_URI`.
+
+Switching the connection does not copy existing Atlas data; migrate that data separately if it is needed for release.
 
 ## Swagger UI
 

@@ -60,7 +60,7 @@ start().catch((error) => {
     }
   }
   if (error.code === 8000 || error.code === 18) {
-    console.error('Check the Atlas database username and password in MONGODB_URI. URL-encode special characters in credentials.');
+    console.error('Check the MongoDB username, password, and authSource in MONGODB_URI. URL-encode special characters in credentials.');
   }
   process.exit(1);
 });
