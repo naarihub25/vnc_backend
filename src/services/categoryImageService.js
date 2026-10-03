@@ -27,7 +27,7 @@ async function upload(file) {
     const error = cause instanceof Error ? cause : new Error('Unknown AWS upload error');
     console.error('Unable to upload category image:', error.name, error.message);
     if (error.name === 'CredentialsProviderError') fail('AWS credentials are not available to the backend server.', 503);
-    fail('Unable to upload the image.', 500);
+    fail('Unable to upload the image.', error, 500);
   } finally {
     client.destroy();
   }
