@@ -117,7 +117,7 @@ Example creation body:
 
 Only `name` is required. `slug` defaults to a URL-friendly name such as `kids-toys`, must be unique, and can be supplied explicitly. Renaming preserves existing slugs unless `slug` is included in the update. Names that cannot produce an ASCII slug need an explicit slug. Other defaults: empty description/image URL, sortOrder 0, isActive true. Creation/edit/get return `{ category }`. Lists return `{ categories, total, page, limit }`. Deletion returns 204.
 
-Use `/api/categories?isActive=true&page=1&limit=20` for website navigation; omit isActive to list both active and inactive categories. Results sort by sortOrder then name. Slug conflicts return 409. Image URLs accept HTTP/HTTPS; use the signing endpoint below to upload category images directly to S3. Categories such as Jewels, Gifts, and Home Decor can be created freely—no fixed category enum or automatic seed data.
+Use `/api/categories?isActive=true&page=1&limit=20` for website navigation; omit isActive to list both active and inactive categories. Results sort by sortOrder then name. Slug conflicts return 409. Image URLs accept HTTP/HTTPS; use the upload endpoint below to send category images through the backend to S3. Categories such as Jewels, Gifts, and Home Decor can be created freely—no fixed category enum or automatic seed data.
 
 ### Subcategories
 
@@ -150,7 +150,7 @@ Parent references must exist. Updates reject self-parenting and descendant cycle
 Suggested form order:
 
 1. **Basic details:** required `name`, unique `sku`, `category` (one Category ID), and flexible `productType` (e.g. Building Blocks, Necklace, Gift Box, Vase). Optional `description`. Unique `slug` is generated on creation if omitted.
-2. **Images:** required `images` array containing 1–5 `{ url, alt }` objects. URL must use HTTP/HTTPS; alt text is optional. Array order controls the gallery, and the first image is the main image. Reorder the array to change display order. No image upload is implemented.
+2. **Images:** required `images` array containing 1–5 `{ url, alt }` objects. URL must use HTTP/HTTPS; alt text is optional. Array order controls the gallery, and the first image is the main image. Reorder the array to change display order. Use `POST /api/products/image-upload-url` to prepare each image upload to S3.
 3. **Retail:** `isRetail` defaults to true; `retailPrice` is required when enabled.
 4. **Wholesale:** `isWholesale` defaults to false and supplies the admin availability flag. When enabled, `wholesalePrice` and integer `minWholesaleQty` (at least 1) are required. At least one of retail or wholesale must be enabled. Prices are per unit, nonnegative, and accept up to two decimal places. Currency defaults to INR.
 5. **Inventory/status:** integer `stockQuantity` defaults to 0; `isActive` defaults to true. Timestamps are automatic.
@@ -432,31 +432,45 @@ The server-owned `payment` object contains `status` (`pending`, `paid`, `failed`
 
 ### Category image uploads to S3
 
-`POST /api/categories/image-upload-url` accepts `{ "contentType": "image/png", "fileSize": 12345 }` and returns `{ "uploadUrl": "...", "imageUrl": "..." }`. Supports PNG, JPEG, WebP, and GIF, with a declared size from 1 byte to 5 MiB. The PUT URL expires after 300 seconds. Keys use `categories/<uuid>.<extension>`.
+`POST /api/categories/image-upload-url` now accepts `multipart/form-data` with one file field named `file`. The backend uploads the file to S3 and returns HTTP 200 with `{ "imageUrl": "..." }` only after S3 succeeds. The previous JSON metadata request and presigned URL response are replaced.
 
-Set `S3_IMAGE_BUCKET` and `AWS_REGION` on the backend. Optionally set `S3_PUBLIC_BASE_URL` to your CDN/public image base URL. AWS credentials are resolved by the SDK (for example an IAM role, local AWS profile, or backend-only `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` and optional `AWS_SESSION_TOKEN`). The signing identity needs `s3:PutObject` on the bucket's `categories/*` prefix. Keep credentials out of browser code and `NEXT_PUBLIC_*` variables.
+Supports PNG, JPEG, WebP and GIF MIME types with an actual file size from 1 byte to 5 MiB. Files are held in memory with an enforced size limit; image contents are not decoded. Keys use `categories/<uuid>.<extension>`. This follows the existing public/no-auth category API policy.
 
-The bucket needs CORS allowing your frontend origin, `PUT`, and the `Content-Type` header. Configure public image reads through your bucket policy or CDN; returning imageUrl does not make an object public. This endpoint follows the existing public/no-auth category API policy. Like the original handler, it validates declared metadata only; it does not enforce uploaded byte size or inspect image contents.
-
-Replace the Next.js signing API call with the backend URL:
+Set `S3_IMAGE_BUCKET` and `AWS_REGION` on the backend, plus optional `S3_PUBLIC_BASE_URL` for a CDN/public base URL. AWS credentials come from the SDK credential chain (IAM role, profile or backend environment variables). The backend identity needs `s3:PutObject` on `categories/*`. Configure bucket/CDN reads so the returned URL is accessible. Browser-to-S3 CORS is not needed for category uploads because the backend sends the file to S3.
 
 ```js
 async function uploadCategoryImage(file, backendUrl) {
+  const form = new FormData();
+  form.append('file', file);
   const response = await fetch(`${backendUrl}/api/categories/image-upload-url`, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ contentType: file.type, fileSize: file.size }),
+    body: form, // Browser sets Content-Type with the multipart boundary.
   });
   const data = await response.json();
   if (!response.ok) throw new Error(data.error);
-  const uploaded = await fetch(data.uploadUrl, {
-    method: 'PUT',
-    headers: { 'Content-Type': file.type },
-    body: file,
-  });
-  if (!uploaded.ok) throw new Error('Image upload failed');
-  return data.imageUrl; // Include in POST/PATCH category body after upload succeeds.
+  return data.imageUrl; // Include in POST/PATCH category body.
 }
 ```
 
-Errors: 400 invalid image metadata, 405 unsupported method, 503 missing configuration/credentials, 500 signing failure. Uploading alone does not create or update a category record. After switching frontend callers, remove the old Next.js API route and move its S3 environment configuration to the backend.
+No second frontend upload is needed. Uploading does not automatically create/update a category. Errors: 400 missing/invalid/oversized file or malformed multipart body, 405 unsupported method, 503 missing configuration/credentials, 500 S3 upload failure.
+
+
+### Product image uploads to S3
+
+`POST /api/products/image-upload-url` continues to accept JSON metadata and return a presigned URL:
+
+```json
+{ "contentType": "image/png", "fileSize": 12345 }
+```
+
+Returns `{ "uploadUrl": "...", "imageUrl": "..." }`. PUT the file to `uploadUrl` with its matching `Content-Type`, then include the returned URL in the product create/update body:
+
+```json
+{ "images": [{ "url": "<returned imageUrl>", "alt": "Front view" }] }
+```
+
+Call once per file. Products accept 1–5 images; PATCH replaces the entire images array, so include any existing images you want to keep. Signing/uploading does not save a product automatically.
+
+Uses the existing `S3_IMAGE_BUCKET`, `AWS_REGION`, AWS credentials, and optional `S3_PUBLIC_BASE_URL`. Product keys use `products/<uuid>.<extension>`; grant the signing identity `s3:PutObject` on `products/*` as well as `categories/*`, and ensure public/CDN reads cover that prefix. For product uploads, bucket CORS must allow the frontend origin, PUT, and the Content-Type header.
+
+This is a public endpoint supporting PNG, JPEG, WebP, and GIF with a declared size of 1 byte to 5 MiB and a five-minute PUT URL expiry. It validates declared metadata, not uploaded bytes. Errors: 400 invalid metadata, 405 unsupported method, 503 missing configuration/credentials, 500 signing failure.

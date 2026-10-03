@@ -4,7 +4,7 @@ const properties = {
   name: { type: 'string', minLength: 1, maxLength: 100, example: 'Kids Toys' },
   slug: { type: 'string', maxLength: 120, pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*$', example: 'kids-toys', description: 'Generated from name on creation if omitted. Renaming preserves the slug unless explicitly changed.' },
   description: { type: 'string', maxLength: 2000, example: 'Fun toys for children', default: '' },
-  imageUrl: { type: 'string', maxLength: 2048, example: 'https://example.com/images/kids-toys.jpg', default: '', description: 'HTTP/HTTPS image URL or empty string. Use the category image-upload-url endpoint to prepare an S3 upload.' },
+  imageUrl: { type: 'string', maxLength: 2048, example: 'https://example.com/images/kids-toys.jpg', default: '', description: 'HTTP/HTTPS image URL or empty string. Use the category image-upload-url endpoint to upload a file to S3.' },
   sortOrder: { type: 'integer', minimum: 0, maximum: 1000000, default: 0 },
   isActive: { type: 'boolean', default: true },
 };
@@ -30,22 +30,21 @@ module.exports = {
   paths: {
     '/api/categories/image-upload-url': {
       post: {
-        summary: 'Prepare a category image upload to S3', tags: ['Categories'],
-        description: 'Returns a five-minute presigned PUT URL. Upload the file directly to S3 using its contentType, then save imageUrl with the category. Validates declared size only; does not inspect uploaded bytes. Public endpoint, matching category CRUD.',
-        requestBody: { required: true, content: { 'application/json': { schema: {
-          type: 'object', required: ['contentType', 'fileSize'], properties: {
-            contentType: { type: 'string', enum: ['image/gif', 'image/jpeg', 'image/png', 'image/webp'] },
-            fileSize: { type: 'integer', minimum: 1, maximum: 5242880 },
+        summary: 'Upload a category image to S3', tags: ['Categories'],
+        description: 'Send one file as multipart/form-data. The backend uploads it to S3 and returns imageUrl after success. Maximum actual file size is 5 MiB. Accepts PNG, JPEG, WebP and GIF MIME types; does not decode image contents. Save imageUrl with the category. Public endpoint, matching category CRUD.',
+        requestBody: { required: true, content: { 'multipart/form-data': { schema: {
+          type: 'object', required: ['file'], properties: {
+            file: { type: 'string', format: 'binary' },
           },
         } } } },
         responses: {
-          200: response('Upload prepared', { type: 'object', required: ['uploadUrl', 'imageUrl'], properties: {
-            uploadUrl: { type: 'string', format: 'uri' }, imageUrl: { type: 'string', format: 'uri' },
+          200: response('Image uploaded', { type: 'object', required: ['imageUrl'], properties: {
+            imageUrl: { type: 'string', format: 'uri' },
           } }),
-          400: response('Invalid image type or declared size', ref('Error')),
+          400: response('Missing file, invalid type, oversized file or invalid multipart request', ref('Error')),
           405: response('Method not allowed', ref('Error')),
           503: response('Missing S3 configuration or AWS credentials', ref('Error')),
-          500: response('Unable to prepare the image upload', ref('Error')),
+          500: response('Unable to upload the image', ref('Error')),
         },
       },
     },

@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const presigner = require('@aws-sdk/s3-request-presigner');
 const app = require('../src/app');
 
-test('category image upload HTTP contract and signing errors', async t => {
+for (const prefix of ['products']) test(`${prefix} image upload HTTP contract and signing errors`, async t => {
   const keys = ['S3_IMAGE_BUCKET', 'AWS_REGION', 'S3_PUBLIC_BASE_URL'];
   const previous = keys.map(key => process.env[key]);
   t.after(() => keys.forEach((key, i) => { if (previous[i] === undefined) delete process.env[key]; else process.env[key] = previous[i]; }));
@@ -22,7 +22,7 @@ test('category image upload HTTP contract and signing errors', async t => {
   const server = app.listen(0, '127.0.0.1');
   t.after(() => { server.close(); server.closeAllConnections(); });
   await new Promise((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });
-  const url = `http://127.0.0.1:${server.address().port}/api/categories/image-upload-url`;
+  const url = `http://127.0.0.1:${server.address().port}/api/${prefix}/image-upload-url`;
   const call = body => fetch(url, { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(body) });
   for (const [contentType, extension] of [['image/png', 'png'], ['image/jpeg', 'jpg'], ['image/webp', 'webp'], ['image/gif', 'gif']]) {
     const res = await call({ contentType, fileSize: 5242880 });
@@ -31,7 +31,7 @@ test('category image upload HTTP contract and signing errors', async t => {
     const input = signed.at(-1);
     assert.equal(input.Bucket, 'test-bucket');
     assert.equal(input.ContentType, contentType);
-    assert.ok(input.Key.startsWith('categories/') && input.Key.endsWith(`.${extension}`));
+    assert.ok(input.Key.startsWith(`${prefix}/`) && input.Key.endsWith(`.${extension}`));
     assert.equal(data.imageUrl, `https://test-bucket.s3.ap-south-1.amazonaws.com/${input.Key}`);
     assert.equal(data.uploadUrl, 'https://example.com/signed-put');
   }

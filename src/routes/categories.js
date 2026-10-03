@@ -1,6 +1,20 @@
 const router = require('express').Router();
 const controller = require('../controllers/categoryController');
-router.post('/image-upload-url', controller.imageUploadUrl);
+const multer = require('multer');
+const { allowedImageTypes } = require('../services/categoryImageService');
+const receiveImage = multer({
+  storage: multer.memoryStorage(),
+  limits: { fileSize: 5 * 1024 * 1024, files: 1, fields: 0, parts: 2 },
+  fileFilter(req, file, callback) {
+    callback(allowedImageTypes.has(file.mimetype) ? null : new Error('Unsupported image type'), allowedImageTypes.has(file.mimetype));
+  },
+}).single('file');
+router.post('/image-upload-url', (req, res, next) => {
+  receiveImage(req, res, error => {
+    if (error) return res.status(400).json({ error: 'Send one PNG, JPEG, WebP or GIF image up to 5 MB in the file field.' });
+    next();
+  });
+}, controller.imageUploadUrl);
 router.all('/image-upload-url', (req, res) => res.set('Allow', 'POST').status(405).json({ error: 'Method not allowed.' }));
 router.post('/', controller.create);
 router.get('/', controller.list);

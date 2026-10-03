@@ -8,7 +8,7 @@ async function remove(req, res) { await service.remove(req.params.id); res.statu
 async function subcategories(req, res) { res.json(await service.subcategories(req.params.id, req.query)); }
 async function parents(req, res) { res.json({ categories: await service.parents() }); }
 async function imageUploadUrl(req, res, next) {
-  try { res.json(await imageService.prepareUpload(req.body)); }
+  try { res.json(await imageService.upload(req.file)); }
   catch (error) {
     if ([400, 500, 503].includes(error.status)) return res.status(error.status).json({ error: error.message });
     next(error);

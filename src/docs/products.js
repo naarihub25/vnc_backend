@@ -6,7 +6,7 @@ const properties = {
   category: { type: 'string', pattern: '^[a-fA-F0-9]{24}$', description: 'Exactly one existing category or subcategory ID.' },
   productType: { type: 'string', maxLength: 100, example: 'Building Blocks' },
   description: { type: 'string', maxLength: 10000, default: '' },
-  images: { type: 'array', minItems: 1, maxItems: 5, description: 'Ordered gallery. First image is the main image. PATCH replaces the complete array.', items: { type: 'object', required: ['url'], additionalProperties: false, properties: { url: { type: 'string', format: 'uri', maxLength: 2048, example: 'https://example.com/front.jpg', description: 'HTTP/HTTPS only' }, alt: { type: 'string', maxLength: 200, default: '' } } } },
+  images: { type: 'array', minItems: 1, maxItems: 5, description: 'Ordered gallery. First image is the main image. PATCH replaces the complete array. Use /api/products/image-upload-url to prepare each S3 image upload.', items: { type: 'object', required: ['url'], additionalProperties: false, properties: { url: { type: 'string', format: 'uri', maxLength: 2048, example: 'https://example.com/front.jpg', description: 'HTTP/HTTPS only' }, alt: { type: 'string', maxLength: 200, default: '' } } } },
   currency: { type: 'string', pattern: '^[A-Za-z]{3}$', default: 'INR' },
   isRetail: { type: 'boolean', default: true },
   retailPrice: { type: 'number', minimum: 0, maximum: 1000000000, multipleOf: 0.01, example: 499, description: 'Required when isRetail is true. Per-unit price.' },
@@ -36,6 +36,27 @@ module.exports = {
     ProductList: { type: 'object', properties: { products: { type: 'array', items: ref('Product') }, total: { type: 'integer' }, page: { type: 'integer' }, limit: { type: 'integer' } } },
   },
   paths: {
+    '/api/products/image-upload-url': {
+      post: {
+        summary: 'Prepare a product image upload to S3', tags: ['Products'],
+        description: 'Returns a five-minute presigned PUT URL. Upload the file directly to S3 using its contentType, then save imageUrl as an images[].url entry with the product. Validates declared size only; does not inspect uploaded bytes. Public endpoint, matching product CRUD.',
+        requestBody: { required: true, content: { 'application/json': { schema: {
+          type: 'object', required: ['contentType', 'fileSize'], properties: {
+            contentType: { type: 'string', enum: ['image/gif', 'image/jpeg', 'image/png', 'image/webp'] },
+            fileSize: { type: 'integer', minimum: 1, maximum: 5242880 },
+          },
+        } } } },
+        responses: {
+          200: response('Upload prepared', { type: 'object', required: ['uploadUrl', 'imageUrl'], properties: {
+            uploadUrl: { type: 'string', format: 'uri' }, imageUrl: { type: 'string', format: 'uri' },
+          } }),
+          400: response('Invalid image type or declared size', ref('Error')),
+          405: response('Method not allowed', ref('Error')),
+          503: response('Missing S3 configuration or AWS credentials', ref('Error')),
+          500: response('Unable to prepare the image upload', ref('Error')),
+        },
+      },
+    },
     '/api/products/search': {
       get: { ...operation('Global product and category search', { result: 'ProductSearchResults' }),
         description: 'Literal case-insensitive substring search over product name, slug, SKU, type and description, plus active category names/slugs and their active descendants. Returns active products only, newest first, without duplicates. No fuzzy matching or relevance ranking. Direct product matches do not require an active category.',
