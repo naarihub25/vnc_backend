@@ -1,5 +1,7 @@
 const router = require('express').Router();
 const controller = require('../controllers/categoryController');
+router.post('/image-upload-url', controller.imageUploadUrl);
+router.all('/image-upload-url', (req, res) => res.set('Allow', 'POST').status(405).json({ error: 'Method not allowed.' }));
 router.post('/', controller.create);
 router.get('/', controller.list);
 router.get('/parents', controller.parents);

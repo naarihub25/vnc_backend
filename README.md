@@ -117,7 +117,7 @@ Example creation body:
 
 Only `name` is required. `slug` defaults to a URL-friendly name such as `kids-toys`, must be unique, and can be supplied explicitly. Renaming preserves existing slugs unless `slug` is included in the update. Names that cannot produce an ASCII slug need an explicit slug. Other defaults: empty description/image URL, sortOrder 0, isActive true. Creation/edit/get return `{ category }`. Lists return `{ categories, total, page, limit }`. Deletion returns 204.
 
-Use `/api/categories?isActive=true&page=1&limit=20` for website navigation; omit isActive to list both active and inactive categories. Results sort by sortOrder then name. Slug conflicts return 409. Image URLs accept HTTP/HTTPS; this API does not upload images. Categories such as Jewels, Gifts, and Home Decor can be created freely—no fixed category enum or automatic seed data.
+Use `/api/categories?isActive=true&page=1&limit=20` for website navigation; omit isActive to list both active and inactive categories. Results sort by sortOrder then name. Slug conflicts return 409. Image URLs accept HTTP/HTTPS; use the signing endpoint below to upload category images directly to S3. Categories such as Jewels, Gifts, and Home Decor can be created freely—no fixed category enum or automatic seed data.
 
 ### Subcategories
 
@@ -428,3 +428,35 @@ RAZORPAY_WEBHOOK_SECRET=your_razorpay_webhook_secret
 ```
 
 The server-owned `payment` object contains `status` (`pending`, `paid`, `failed`, `cancelled`, `refunded`), nullable `provider`, `providerOrderId`, `transactionId`, and `paidAt`. Provider-specific fields stay null for COD. Clients cannot submit payment status or transaction details through order creation. Razorpay verification and webhooks set online payment fields after signature validation. Order status and payment status are separate.
+
+
+### Category image uploads to S3
+
+`POST /api/categories/image-upload-url` accepts `{ "contentType": "image/png", "fileSize": 12345 }` and returns `{ "uploadUrl": "...", "imageUrl": "..." }`. Supports PNG, JPEG, WebP, and GIF, with a declared size from 1 byte to 5 MiB. The PUT URL expires after 300 seconds. Keys use `categories/<uuid>.<extension>`.
+
+Set `S3_IMAGE_BUCKET` and `AWS_REGION` on the backend. Optionally set `S3_PUBLIC_BASE_URL` to your CDN/public image base URL. AWS credentials are resolved by the SDK (for example an IAM role, local AWS profile, or backend-only `AWS_ACCESS_KEY_ID` / `AWS_SECRET_ACCESS_KEY` and optional `AWS_SESSION_TOKEN`). The signing identity needs `s3:PutObject` on the bucket's `categories/*` prefix. Keep credentials out of browser code and `NEXT_PUBLIC_*` variables.
+
+The bucket needs CORS allowing your frontend origin, `PUT`, and the `Content-Type` header. Configure public image reads through your bucket policy or CDN; returning imageUrl does not make an object public. This endpoint follows the existing public/no-auth category API policy. Like the original handler, it validates declared metadata only; it does not enforce uploaded byte size or inspect image contents.
+
+Replace the Next.js signing API call with the backend URL:
+
+```js
+async function uploadCategoryImage(file, backendUrl) {
+  const response = await fetch(`${backendUrl}/api/categories/image-upload-url`, {
+    method: 'POST',
+    headers: { 'Content-Type': 'application/json' },
+    body: JSON.stringify({ contentType: file.type, fileSize: file.size }),
+  });
+  const data = await response.json();
+  if (!response.ok) throw new Error(data.error);
+  const uploaded = await fetch(data.uploadUrl, {
+    method: 'PUT',
+    headers: { 'Content-Type': file.type },
+    body: file,
+  });
+  if (!uploaded.ok) throw new Error('Image upload failed');
+  return data.imageUrl; // Include in POST/PATCH category body after upload succeeds.
+}
+```
+
+Errors: 400 invalid image metadata, 405 unsupported method, 503 missing configuration/credentials, 500 signing failure. Uploading alone does not create or update a category record. After switching frontend callers, remove the old Next.js API route and move its S3 environment configuration to the backend.
