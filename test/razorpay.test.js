@@ -60,6 +60,22 @@ test('Razorpay online order creation, verification, and webhook update payment s
   assert.equal(orders[0].payment.providerOrderId, 'order_test_123');
   assert.match(sentEmails[0].subject, /Thank you for your order/);
 
+  const postOrder = () => fetch(base + '/payments/razorpay/orders', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(orderBody) });
+  const count = orders.length;
+  delete process.env.RAZORPAY_KEY_SECRET;
+  const missingConfig = await postOrder();
+  assert.equal(missingConfig.status, 503);
+  assert.deepEqual(await missingConfig.json(), { error: 'Razorpay is not configured' });
+  assert.equal(orders.length, count);
+  process.env.RAZORPAY_KEY_SECRET = 'test_secret';
+  t.mock.method(console, 'error', () => {});
+  for (const statusCode of [401, 403, 400, 429, 500, undefined]) {
+    razorpayService.setTestClient({ orders: { create: async () => { throw { statusCode, error: { code: 'BAD_REQUEST_ERROR', description: 'private provider details' } }; } } });
+    const failure = await postOrder();
+    assert.equal(failure.status, [401, 403].includes(statusCode) ? 503 : 502);
+    assert.doesNotMatch(JSON.stringify(await failure.json()), /private provider details/);
+  }
+
   const paymentId = 'pay_test_123';
   const signature = crypto.createHmac('sha256', process.env.RAZORPAY_KEY_SECRET).update(`order_test_123|${paymentId}`).digest('hex');
   const verified = await fetch(base + '/payments/razorpay/verify', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ razorpay_order_id: 'order_test_123', razorpay_payment_id: paymentId, razorpay_signature: signature }) });

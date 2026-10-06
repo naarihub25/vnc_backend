@@ -36,7 +36,7 @@ test('product CRUD, channel filters, validation, and category protection (in-mem
     const res = await fetch(base + path, { method, headers: { 'content-type': 'application/json' }, body: body === undefined ? undefined : JSON.stringify(body) });
     return { status: res.status, body: res.status === 204 ? null : await res.json() };
   }
-  const body = { name: 'Building Blocks', sku: 'toy-001', category: categoryId, productType: 'Blocks', images: [{ url: 'https://example.com/front.jpg' }], retailPrice: 499 };
+  const body = { name: 'Building Blocks', sku: 'toy-001', category: categoryId, productType: 'Blocks', images: [{ url: 'https://example.com/front.jpg' }], retailPrice: 499, hsnCode: ' 0101 ', cgst: 9, sgst: 9 };
   const created = await call('/products', 'POST', body);
   assert.equal(created.status, 201);
   assert.equal(created.body.product.sku, 'TOY-001');
@@ -44,7 +44,29 @@ test('product CRUD, channel filters, validation, and category protection (in-mem
   assert.equal(created.body.product.__v, undefined);
   assert.equal(created.body.product.isTrending, false);
   assert.equal(created.body.product.isRecommended, false);
+  assert.equal(created.body.product.hsnCode, '0101');
+  assert.equal(created.body.product.cgst, 9);
+  assert.equal(created.body.product.sgst, 9);
   const id = created.body.product._id;
+  const taxUpdate = await call('/products/' + id, 'PATCH', { cgst: 2.5, sgst: 2.5 });
+  assert.equal(taxUpdate.status, 200);
+  assert.equal(taxUpdate.body.product.hsnCode, '0101');
+  assert.equal((await call('/products/' + id)).body.product.cgst, 2.5);
+  assert.equal((await call('/products')).body.products[0].sgst, 2.5);
+  for (const patch of [{ hsnCode: 101 }, { hsnCode: null }, { hsnCode: '12AB' }, { hsnCode: '123' }, { hsnCode: '1234567890' }, { cgst: '9' }, { cgst: null }, { cgst: -1 }, { sgst: 101 }, { sgst: 1.234 }]) {
+    assert.equal((await call('/products', 'POST', { ...body, ...patch })).status, 400);
+    assert.equal((await call('/products/' + id, 'PATCH', patch)).status, 400);
+  }
+  assert.equal((await call('/products/' + id)).body.product.cgst, 2.5);
+  const cleared = await call('/products/' + id, 'PATCH', { hsnCode: '', cgst: 0, sgst: 0 });
+  assert.equal(cleared.status, 200);
+  assert.equal(cleared.body.product.hsnCode, '');
+  assert.equal(cleared.body.product.cgst, 0);
+  for (const key of ['hsnCode', 'cgst', 'sgst']) delete records.get(id)[key];
+  const legacy = (await call('/products/' + id)).body.product;
+  assert.equal(legacy.hsnCode, '');
+  assert.equal(legacy.cgst, 0);
+  assert.equal(legacy.sgst, 0);
   assert.equal((await call('/products', 'POST', body)).status, 409);
   for (const patch of [{ images: [] }, { images: [{ url: 'javascript:alert(1)' }] }, { images: Array.from({ length: 6 }, () => body.images[0]) }, { category: null }, { retailPrice: '499' }, { isWholesale: 'true' }, { unexpected: true }, { isTrending: 'true' }, { isRecommended: null }, { isWholesale: true }, { stockQuantity: 1.5 }]) {
     assert.equal((await call('/products', 'POST', { ...body, ...patch })).status, 400);

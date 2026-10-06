@@ -1,5 +1,8 @@
 const ref = name => ({ $ref: `#/components/schemas/${name}` });
 const properties = {
+  hsnCode: { type: 'string', default: '', pattern: '^(?:[0-9]{2}|[0-9]{4}|[0-9]{6}|[0-9]{8})?$', example: '0101', description: 'Optional HSN code. Send as a string to preserve leading zeros; empty string clears it. Format validation only.' },
+  cgst: { type: 'number', default: 0, minimum: 0, maximum: 100, multipleOf: 0.01, example: 9, description: 'CGST percentage, e.g. 9 means 9%. Stored product metadata; does not change checkout or invoice calculations.' },
+  sgst: { type: 'number', default: 0, minimum: 0, maximum: 100, multipleOf: 0.01, example: 9, description: 'SGST percentage, e.g. 9 means 9%. Stored product metadata; does not change checkout or invoice calculations.' },
   name: { type: 'string', maxLength: 200, example: 'Wooden Building Blocks' },
   slug: { type: 'string', maxLength: 240, pattern: '^[a-z0-9]+(?:-[a-z0-9]+)*$', description: 'Unique. Generated on creation if omitted; preserved on rename.' },
   sku: { type: 'string', maxLength: 100, example: 'TOY-001', description: 'Unique; normalized to uppercase.' },

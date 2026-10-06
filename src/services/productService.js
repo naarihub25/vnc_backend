@@ -2,17 +2,17 @@ const mongoose = require('mongoose');
 const Product = require('../models/Product');
 const Category = require('../models/Category');
 const { fail, validateBody } = require('../utils/validation');
-const fields = ['name', 'slug', 'sku', 'category', 'productType', 'description', 'images', 'currency', 'isRetail', 'retailPrice', 'isWholesale', 'wholesalePrice', 'minWholesaleQty', 'stockQuantity', 'isActive', 'isTrending', 'isRecommended'];
+const fields = ['hsnCode', 'cgst', 'sgst', 'name', 'slug', 'sku', 'category', 'productType', 'description', 'images', 'currency', 'isRetail', 'retailPrice', 'isWholesale', 'wholesalePrice', 'minWholesaleQty', 'stockQuantity', 'isActive', 'isTrending', 'isRecommended'];
 function validate(body, creating = false) {
   validateBody(body, fields);
   if (!Object.keys(body).length) fail('No product fields supplied');
   if (creating) for (const key of ['name', 'sku', 'category', 'productType', 'images']) if (body[key] === undefined) fail(`${key} is required`);
-  for (const key of ['name', 'slug', 'sku', 'productType', 'description', 'currency']) {
+  for (const key of ['name', 'slug', 'sku', 'productType', 'description', 'currency', 'hsnCode']) {
     if (body[key] !== undefined && typeof body[key] !== 'string') fail(`${key} must be a string`);
   }
   if (body.category !== undefined && (typeof body.category !== 'string' || !mongoose.isObjectIdOrHexString(body.category))) fail('Invalid category ID');
   for (const key of ['isRetail', 'isWholesale', 'isActive', 'isTrending', 'isRecommended']) if (body[key] !== undefined && typeof body[key] !== 'boolean') fail(`${key} must be a boolean`);
-  for (const key of ['retailPrice', 'wholesalePrice', 'minWholesaleQty', 'stockQuantity']) {
+  for (const key of ['retailPrice', 'wholesalePrice', 'minWholesaleQty', 'stockQuantity', 'cgst', 'sgst']) {
     if (body[key] !== undefined && (typeof body[key] !== 'number' || !Number.isFinite(body[key]))) fail(`${key} must be a number`);
   }
   if (body.slug !== undefined && !/^[a-z0-9]+(?:-[a-z0-9]+)*$/.test(body.slug)) fail('Invalid product slug');

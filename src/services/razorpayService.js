@@ -21,8 +21,8 @@ function webhookSecret() {
 }
 
 function getClient() {
-  if (testClient) return testClient;
   if (!keyId() || !keySecret()) fail('Razorpay is not configured', 503);
+  if (testClient) return testClient;
   if (!client) client = new Razorpay({ key_id: keyId(), key_secret: keySecret() });
   return client;
 }
@@ -43,6 +43,8 @@ async function createRazorpayOrder(body) {
   validateBody(body, ['userId', 'items']);
   const { user, items, currency, subtotal } = await orderService.buildOrderData(body);
   if (currency !== 'INR') fail('Razorpay online payment currently supports INR only');
+  const paymentClient = getClient();
+  const amount = amountPaise({ subtotal });
   const order = await Order.create({
     user: user._id,
     customer: { name: user.name, email: user.email, phone: user.phone },
@@ -54,12 +56,23 @@ async function createRazorpayOrder(body) {
     paymentMethod: 'online',
     payment: { status: 'pending', provider: 'razorpay' },
   });
-  const razorpayOrder = await getClient().orders.create({
-    amount: amountPaise(order),
+  let razorpayOrder;
+  try {
+    razorpayOrder = await paymentClient.orders.create({
+    amount,
     currency,
     receipt: String(order._id),
     notes: { localOrderId: String(order._id), customerEmail: order.customer.email },
   });
+  } catch (error) {
+    // Log only diagnostic codes, never credentials, headers or customer data.
+    const statusCode = Number(error?.statusCode);
+    const rawCode = error?.error?.code || error?.code;
+    const code = typeof rawCode === 'string' && /^[A-Z0-9_]{1,80}$/.test(rawCode) ? rawCode : 'UNKNOWN';
+    console.error('Razorpay order creation failed', { localOrderId: String(order._id), statusCode: Number.isFinite(statusCode) ? statusCode : null, code });
+    if (statusCode === 401 || statusCode === 403) fail('Razorpay authentication failed. Check the server API key configuration.', 503);
+    fail('Unable to create the Razorpay order. Please try again later.', 502);
+  }
   order.payment.providerOrderId = razorpayOrder.id;
   await order.save();
   emailService.sendOrderCreatedEmail(order).catch(error => {

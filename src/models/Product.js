@@ -27,6 +27,12 @@ const productSchema = new mongoose.Schema({
   category: { type: mongoose.Schema.Types.ObjectId, ref: 'Category', required: true },
   productType: { type: String, required: true, trim: true, maxlength: 100 },
   description: { type: String, trim: true, maxlength: 10000, default: '' },
+  hsnCode: { type: String, trim: true, default: '',
+    validate: { validator: value => typeof value === 'string' && /^(?:[0-9]{2}|[0-9]{4}|[0-9]{6}|[0-9]{8})?$/.test(value), message: 'HSN code must be empty or contain 2, 4, 6 or 8 digits' } },
+  cgst: { type: Number, default: 0, required: true,
+    validate: { validator: value => validPrice(value) && value <= 100, message: 'CGST must be between 0 and 100 with at most 2 decimal places' } },
+  sgst: { type: Number, default: 0, required: true,
+    validate: { validator: value => validPrice(value) && value <= 100, message: 'SGST must be between 0 and 100 with at most 2 decimal places' } },
   // Array order is display order; images[0] is the main product image.
   images: {
     type: [imageSchema], required: true,

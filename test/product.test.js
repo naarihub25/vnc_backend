@@ -15,6 +15,9 @@ test('product schema supports retail, wholesale and shared category/image data',
   assert.equal(retail.isTrending, false);
   assert.equal(retail.isRecommended, false);
   assert.equal(retail.currency, 'INR');
+  assert.equal(retail.hsnCode, '');
+  assert.equal(retail.cgst, 0);
+  assert.equal(retail.sgst, 0);
   assert.equal(retail.images[0].url, 'https://example.com/front.jpg');
   assert.equal(retail.images[0]._id, undefined);
   await new Product({ ...base(), isWholesale: true, wholesalePrice: 350, minWholesaleQty: 10 }).validate();

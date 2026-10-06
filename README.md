@@ -474,3 +474,23 @@ Call once per file. Products accept 1–5 images; PATCH replaces the entire imag
 Uses the existing `S3_IMAGE_BUCKET`, `AWS_REGION`, AWS credentials, and optional `S3_PUBLIC_BASE_URL`. Product keys use `products/<uuid>.<extension>`; grant the signing identity `s3:PutObject` on `products/*` as well as `categories/*`, and ensure public/CDN reads cover that prefix. For product uploads, bucket CORS must allow the frontend origin, PUT, and the Content-Type header.
 
 This is a public endpoint supporting PNG, JPEG, WebP, and GIF with a declared size of 1 byte to 5 MiB and a five-minute PUT URL expiry. It validates declared metadata, not uploaded bytes. Errors: 400 invalid metadata, 405 unsupported method, 503 missing configuration/credentials, 500 signing failure.
+
+
+### Product HSN and tax rates
+
+`POST /api/products` and `PATCH /api/products/:id` accept these optional fields alongside existing product fields:
+
+```json
+{ "hsnCode": "0101", "cgst": 9, "sgst": 9 }
+```
+
+`hsnCode` is a trimmed string containing 2, 4, 6 or 8 digits, or an empty string (default). Leading zeros are preserved. Validation checks format, not whether a code exists. `cgst` and `sgst` are percentage numbers from 0 to 100 with at most two decimal places, defaulting to 0. For example, `9` means 9%, not a currency amount. Strings and null tax values are rejected with HTTP 400.
+
+Create, update, get and list responses include these fields. Existing products without them receive defaults when loaded; no database migration is needed. PATCH preserves omitted fields; send `hsnCode: ""` or a rate of `0` to clear a value. These fields store admin-entered product metadata only; checkout totals, order snapshots, payment amounts and invoices do not yet use them.
+
+
+### Troubleshooting Razorpay server errors
+
+Missing `RAZORPAY_KEY_ID` / `RAZORPAY_KEY_SECRET` returns 503 before a local order is created. Provider authentication failures return 503; other provider/network failures return 502. Server logs include the local order ID, provider HTTP status and diagnostic code without credentials or customer data. Provider failures can leave a pending local order without a provider order ID; retries are not idempotent.
+
+Ensure both API keys are from the same Razorpay account and mode and are present in the running backend process. Restart the process after changing its environment. Verification requires `RAZORPAY_KEY_SECRET`; webhooks require the separately configured `RAZORPAY_WEBHOOK_SECRET`. Unexpected database/application failures still return a generic 500 and log their error name.
