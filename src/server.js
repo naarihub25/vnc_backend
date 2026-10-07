@@ -16,6 +16,7 @@ async function start() {
   await mongoose.model('Product').init();
   await mongoose.model('Banner').init();
   await mongoose.model('Order').init();
+  await mongoose.model('OrderTrackingOtp').init();
   console.log('MongoDB connected');
   const server = app.listen(port, () => console.log(`API listening on port ${port}`));
   server.on('error', () => {

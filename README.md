@@ -150,7 +150,7 @@ Parent references must exist. Updates reject self-parenting and descendant cycle
 Suggested form order:
 
 1. **Basic details:** required `name`, unique `sku`, `category` (one Category ID), and flexible `productType` (e.g. Building Blocks, Necklace, Gift Box, Vase). Optional `description`. Unique `slug` is generated on creation if omitted.
-2. **Images:** required `images` array containing 1–5 `{ url, alt }` objects. URL must use HTTP/HTTPS; alt text is optional. Array order controls the gallery, and the first image is the main image. Reorder the array to change display order. Use `POST /api/products/image-upload-url` to prepare each image upload to S3.
+2. **Images:** required `images` array containing 1–5 `{ url, alt }` objects. URL must use HTTP/HTTPS; alt text is optional. Array order controls the gallery, and the first image is the main image. Reorder the array to change display order. Use `POST /api/products/image-upload-url` to upload up to five images through the backend.
 3. **Retail:** `isRetail` defaults to true; `retailPrice` is required when enabled.
 4. **Wholesale:** `isWholesale` defaults to false and supplies the admin availability flag. When enabled, `wholesalePrice` and integer `minWholesaleQty` (at least 1) are required. At least one of retail or wholesale must be enabled. Prices are per unit, nonnegative, and accept up to two decimal places. Currency defaults to INR.
 5. **Inventory/status:** integer `stockQuantity` defaults to 0; `isActive` defaults to true. Timestamps are automatic.
@@ -219,7 +219,7 @@ Combined filters use AND. Explicit false filters include older records with no f
 
 ## Banner APIs
 
-`src/models/Banner.js` stores `title`, ordered `images: [{ url, alt }]`, `redirectUrl`, `position`, `isActive` (default true), `sortOrder` (default 0), and timestamps. Title, at least one image, redirect URL, and position are required. Images use HTTP/HTTPS URLs; no file upload is included. All images in a banner share its title and redirect target; use separate banner records for different click destinations.
+`src/models/Banner.js` stores `title`, ordered `images: [{ url, alt }]`, `redirectUrl`, `position`, `isActive` (default true), `sortOrder` (default 0), and timestamps. Title, at least one image, redirect URL, and position are required. Images use HTTP/HTTPS URLs; upload files through `/api/banners/image-upload-url` first. All images in a banner share its title and redirect target; use separate banner records for different click destinations.
 
 | Method | Endpoint | Purpose |
 | --- | --- | --- |
@@ -390,7 +390,7 @@ Create a Razorpay order before opening checkout:
 }
 ```
 
-The create API saves a local order with `paymentMethod: "online"` and `payment.provider: "razorpay"`, calls Razorpay `POST /v1/orders`, stores Razorpay `order_id` in `payment.providerOrderId`, and returns:
+The create API validates an order in memory, calls Razorpay `POST /v1/orders`, and only after success saves a MongoDB order with `status: "pending"`, `payment.status: "pending"`, `paymentMethod: "online"`, and the Razorpay order ID. Failed Razorpay creation does not save a MongoDB order. Leaving checkout keeps the saved order pending. Verification or a captured-payment webhook marks payment paid and approves a pending order. Admin status updates cannot approve or fulfill unpaid online orders. Returns:
 
 ```json
 {
@@ -457,23 +457,24 @@ No second frontend upload is needed. Uploading does not automatically create/upd
 
 ### Product image uploads to S3
 
-`POST /api/products/image-upload-url` continues to accept JSON metadata and return a presigned URL:
+`POST /api/products/image-upload-url` now accepts multipart files instead of JSON metadata. Send 1–5 files using the repeated field name `files`. The backend uploads them to S3 and returns `{ "images": [{ "url": "...", "alt": "" }] }` in the same order, only after all uploads succeed. No frontend PUT to S3 is needed.
 
-```json
-{ "contentType": "image/png", "fileSize": 12345 }
+```js
+const form = new FormData();
+for (const file of selectedFiles) form.append('files', file);
+const response = await fetch(`${backendUrl}/api/products/image-upload-url`, {
+  method: 'POST', body: form,
+});
+const data = await response.json();
+if (!response.ok) throw new Error(data.error);
+// Include data.images in the product POST/PATCH body.
 ```
 
-Returns `{ "uploadUrl": "...", "imageUrl": "..." }`. PUT the file to `uploadUrl` with its matching `Content-Type`, then include the returned URL in the product create/update body:
+Let the browser set the multipart Content-Type boundary. Supports PNG, JPEG, WebP and GIF MIME types, each from 1 byte to 5 MiB. The API validates actual file sizes and MIME types, not image contents. Files are buffered in memory (up to 25 MiB per request). Configure the reverse proxy request-size limit above 25 MiB to allow multipart overhead.
 
-```json
-{ "images": [{ "url": "<returned imageUrl>", "alt": "Front view" }] }
-```
+Uses existing `S3_IMAGE_BUCKET`, `AWS_REGION`, credentials and optional `S3_PUBLIC_BASE_URL`. The backend role needs `s3:PutObject` on `products/*`; configure bucket/CDN reads for returned URLs. Browser-to-S3 CORS is unnecessary. This retains the existing public/no-auth product API policy.
 
-Call once per file. Products accept 1–5 images; PATCH replaces the entire images array, so include any existing images you want to keep. Signing/uploading does not save a product automatically.
-
-Uses the existing `S3_IMAGE_BUCKET`, `AWS_REGION`, AWS credentials, and optional `S3_PUBLIC_BASE_URL`. Product keys use `products/<uuid>.<extension>`; grant the signing identity `s3:PutObject` on `products/*` as well as `categories/*`, and ensure public/CDN reads cover that prefix. For product uploads, bucket CORS must allow the frontend origin, PUT, and the Content-Type header.
-
-This is a public endpoint supporting PNG, JPEG, WebP, and GIF with a declared size of 1 byte to 5 MiB and a five-minute PUT URL expiry. It validates declared metadata, not uploaded bytes. Errors: 400 invalid metadata, 405 unsupported method, 503 missing configuration/credentials, 500 signing failure.
+Uploading does not save a product. Product PATCH replaces the images array, so include retained images and keep the total at five or fewer. If S3 fails partway, the request returns an error and no product is saved; objects already uploaded may remain in S3. Errors: 400 invalid files, 405 unsupported method, 503 missing configuration/credentials, 500 upload failure.
 
 
 ### Product HSN and tax rates
@@ -491,6 +492,38 @@ Create, update, get and list responses include these fields. Existing products w
 
 ### Troubleshooting Razorpay server errors
 
-Missing `RAZORPAY_KEY_ID` / `RAZORPAY_KEY_SECRET` returns 503 before a local order is created. Provider authentication failures return 503; other provider/network failures return 502. Server logs include the local order ID, provider HTTP status and diagnostic code without credentials or customer data. Provider failures can leave a pending local order without a provider order ID; retries are not idempotent.
+Missing `RAZORPAY_KEY_ID` / `RAZORPAY_KEY_SECRET` returns 503 before a local order is created. Provider authentication failures return 503; other provider/network failures return 502. Server logs include the local order ID, provider HTTP status and diagnostic code without credentials or customer data. Provider failures do not save a local order. A database failure after provider success can leave a Razorpay order without a local record; retries are not idempotent.
 
 Ensure both API keys are from the same Razorpay account and mode and are present in the running backend process. Restart the process after changing its environment. Verification requires `RAZORPAY_KEY_SECRET`; webhooks require the separately configured `RAZORPAY_WEBHOOK_SECRET`. Unexpected database/application failures still return a generic 500 and log their error name.
+
+
+### Banner image uploads to S3
+
+`POST /api/banners/image-upload-url` accepts 1–5 images per request in the repeated multipart `files` field, matching product uploads. Each file must be 1 byte–5 MiB with PNG, JPEG, WebP or GIF MIME type. The backend uploads to `banners/<uuid>.<extension>` and returns `{ "images": [{ "url": "...", "alt": "" }] }` in request order after all uploads succeed.
+
+```js
+const form = new FormData();
+for (const file of selectedFiles) form.append('files', file);
+const response = await fetch(`${backendUrl}/api/banners/image-upload-url`, {
+  method: 'POST', body: form,
+});
+const data = await response.json();
+if (!response.ok) throw new Error(data.error);
+// Send data.images with the banner POST/PATCH body.
+```
+
+Do not set Content-Type manually; the browser adds the multipart boundary. This uploads files only; banner creation/editing remains a separate JSON request. PATCH replaces the images array, so include images being retained. The five-file limit is per upload request, not a new limit on banner records.
+
+Uses existing S3 configuration. The backend IAM role needs `s3:PutObject` on `banners/*`; an existing `vnc-bucket/*` grant covers this. Configure bucket/CDN reads for returned URLs and proxy request limits above 25 MiB. No browser-to-S3 upload or CORS setup is needed. The endpoint follows the existing public/no-auth banner API policy.
+
+Validation checks actual size and MIME type, not decoded image contents. Errors: 400 invalid files, 405 unsupported method, 503 missing configuration/credentials, 500 upload failure. On partial S3 failure, already uploaded objects may remain; no banner is saved by this endpoint.
+
+
+### End-user order tracking by email
+
+1. `POST /api/orders/tracking/request-otp` with `{ "email": "customer@example.com" }`. Checks saved `Order.customer.email` (exact, case-insensitive), returns 404 if no order exists, otherwise emails a four-digit OTP. Response: `{ "message": "OTP generated. Check your email.", "expiresIn": 300 }`.
+2. `POST /api/orders/by-email` with `{ "email": "customer@example.com", "otp": "0123", "page": 1, "limit": 20 }`. Verifies and consumes the OTP and returns `{ orders, total, page, limit, totalPages }`, newest first. OTP must be a string to preserve leading zeros.
+
+Set `ORDER_TRACKING_DEV_OTP=true` to include `otp` in the first response in any environment, including production. This temporarily bypasses proof of email ownership. In that mode SMTP may be unconfigured; when configured, email is still sent. Set the flag to `false` or remove it to hide OTPs and require working SMTP. Delivery failures return 503.
+
+Challenges are stored as salted hashes in MongoDB, expire after five minutes, allow five verification attempts and have a 60-second resend cooldown. Startup creates the unique-email and expiry indexes. Both routes share a process-local limit of 20 requests/IP/15 minutes. OTPs are single-use; another page/request requires a fresh OTP. No order is changed by tracking. Existing public admin list/detail APIs retain their current access policy; this new flow does not secure those older routes.

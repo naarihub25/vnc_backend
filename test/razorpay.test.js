@@ -34,13 +34,14 @@ test('Razorpay online order creation, verification, and webhook update payment s
   t.mock.method(User, 'findById', async id => users.get(String(id)) || null);
   const product = new Product({ _id: new mongoose.Types.ObjectId(), name: 'Jewel', sku: 'JWL-1', category: new mongoose.Types.ObjectId(), productType: 'Jewels', images: [{ url: 'https://example.com/jewel.jpg' }], retailPrice: 125.5, stockQuantity: 5 });
   t.mock.method(Product, 'find', async filter => filter._id.$in.some(id => String(id) === String(product._id)) ? [product] : []);
-  const attachOrder = order => {
-    order.save = async () => { await order.validate(); return order; };
-    return order;
-  };
-  t.mock.method(Order, 'create', async data => { const order = attachOrder(new Order(data)); await order.validate(); orders.push(order); return order; });
+  t.mock.method(Order.prototype, 'save', async function () {
+    await this.validate();
+    if (!orders.includes(this)) orders.push(this);
+    return this;
+  });
+  t.mock.method(Order, 'findById', async id => orders.find(order => String(order._id) === String(id)) || null);
   t.mock.method(Order, 'findOne', async filter => orders.find(order => order.payment.provider === filter['payment.provider'] && order.payment.providerOrderId === filter['payment.providerOrderId']) || null);
-  razorpayService.setTestClient({ orders: { create: async data => ({ id: 'order_test_123', amount: data.amount, currency: data.currency }) } });
+  razorpayService.setTestClient({ orders: { create: async data => { assert.equal(orders.length, 0); return { id: 'order_test_123', amount: data.amount, currency: data.currency }; } } });
   emailService.setTestSender(async message => { sentEmails.push(message); return { messageId: String(sentEmails.length) }; });
 
   const server = app.listen(0, '127.0.0.1');
@@ -58,6 +59,11 @@ test('Razorpay online order creation, verification, and webhook update payment s
   assert.equal(createdBody.data.razorpay.orderId, 'order_test_123');
   assert.equal(createdBody.data.razorpay.amount, 25100);
   assert.equal(orders[0].payment.providerOrderId, 'order_test_123');
+  assert.equal(orders[0].status, 'pending');
+  assert.equal(orders[0].payment.status, 'pending');
+  const premature = await fetch(base + '/orders/' + orders[0]._id + '/status', { method: 'PATCH', headers: { 'content-type': 'application/json' }, body: JSON.stringify({ status: 'approved' }) });
+  assert.equal(premature.status, 409);
+  assert.equal(orders[0].status, 'pending');
   assert.match(sentEmails[0].subject, /Thank you for your order/);
 
   const postOrder = () => fetch(base + '/payments/razorpay/orders', { method: 'POST', headers: { 'content-type': 'application/json' }, body: JSON.stringify(orderBody) });
@@ -74,6 +80,8 @@ test('Razorpay online order creation, verification, and webhook update payment s
     const failure = await postOrder();
     assert.equal(failure.status, [401, 403].includes(statusCode) ? 503 : 502);
     assert.doesNotMatch(JSON.stringify(await failure.json()), /private provider details/);
+    assert.equal(orders.length, count);
+    assert.equal(sentEmails.length, 1);
   }
 
   const paymentId = 'pay_test_123';

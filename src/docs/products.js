@@ -9,7 +9,7 @@ const properties = {
   category: { type: 'string', pattern: '^[a-fA-F0-9]{24}$', description: 'Exactly one existing category or subcategory ID.' },
   productType: { type: 'string', maxLength: 100, example: 'Building Blocks' },
   description: { type: 'string', maxLength: 10000, default: '' },
-  images: { type: 'array', minItems: 1, maxItems: 5, description: 'Ordered gallery. First image is the main image. PATCH replaces the complete array. Use /api/products/image-upload-url to prepare each S3 image upload.', items: { type: 'object', required: ['url'], additionalProperties: false, properties: { url: { type: 'string', format: 'uri', maxLength: 2048, example: 'https://example.com/front.jpg', description: 'HTTP/HTTPS only' }, alt: { type: 'string', maxLength: 200, default: '' } } } },
+  images: { type: 'array', minItems: 1, maxItems: 5, description: 'Ordered gallery. First image is the main image. PATCH replaces the complete array. Use /api/products/image-upload-url to upload up to five files through the backend.', items: { type: 'object', required: ['url'], additionalProperties: false, properties: { url: { type: 'string', format: 'uri', maxLength: 2048, example: 'https://example.com/front.jpg', description: 'HTTP/HTTPS only' }, alt: { type: 'string', maxLength: 200, default: '' } } } },
   currency: { type: 'string', pattern: '^[A-Za-z]{3}$', default: 'INR' },
   isRetail: { type: 'boolean', default: true },
   retailPrice: { type: 'number', minimum: 0, maximum: 1000000000, multipleOf: 0.01, example: 499, description: 'Required when isRetail is true. Per-unit price.' },
@@ -41,22 +41,21 @@ module.exports = {
   paths: {
     '/api/products/image-upload-url': {
       post: {
-        summary: 'Prepare a product image upload to S3', tags: ['Products'],
-        description: 'Returns a five-minute presigned PUT URL. Upload the file directly to S3 using its contentType, then save imageUrl as an images[].url entry with the product. Validates declared size only; does not inspect uploaded bytes. Public endpoint, matching product CRUD.',
-        requestBody: { required: true, content: { 'application/json': { schema: {
-          type: 'object', required: ['contentType', 'fileSize'], properties: {
-            contentType: { type: 'string', enum: ['image/gif', 'image/jpeg', 'image/png', 'image/webp'] },
-            fileSize: { type: 'integer', minimum: 1, maximum: 5242880 },
+        summary: 'Upload product images to S3', tags: ['Products'],
+        description: 'Accepts 1–5 files in the repeated multipart files field, up to 5 MiB each. Backend uploads to S3 and returns images in request order after all uploads succeed. Save the returned images array with the product. MIME type and actual size are validated; contents are not decoded. Public endpoint, matching product CRUD.',
+        requestBody: { required: true, content: { 'multipart/form-data': { schema: {
+          type: 'object', required: ['files'], properties: {
+            files: { type: 'array', minItems: 1, maxItems: 5, items: { type: 'string', format: 'binary' } },
           },
         } } } },
         responses: {
-          200: response('Upload prepared', { type: 'object', required: ['uploadUrl', 'imageUrl'], properties: {
-            uploadUrl: { type: 'string', format: 'uri' }, imageUrl: { type: 'string', format: 'uri' },
+          200: response('Images uploaded', { type: 'object', required: ['images'], properties: {
+            images: properties.images,
           } }),
-          400: response('Invalid image type or declared size', ref('Error')),
+          400: response('Invalid file type, size, count or multipart request', ref('Error')),
           405: response('Method not allowed', ref('Error')),
           503: response('Missing S3 configuration or AWS credentials', ref('Error')),
-          500: response('Unable to prepare the image upload', ref('Error')),
+          500: response('Unable to upload the product images', ref('Error')),
         },
       },
     },

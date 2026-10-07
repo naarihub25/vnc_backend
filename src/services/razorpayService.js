@@ -45,7 +45,7 @@ async function createRazorpayOrder(body) {
   if (currency !== 'INR') fail('Razorpay online payment currently supports INR only');
   const paymentClient = getClient();
   const amount = amountPaise({ subtotal });
-  const order = await Order.create({
+  const order = new Order({
     user: user._id,
     customer: { name: user.name, email: user.email, phone: user.phone },
     shippingAddress: user.address.toObject(),
@@ -56,6 +56,7 @@ async function createRazorpayOrder(body) {
     paymentMethod: 'online',
     payment: { status: 'pending', provider: 'razorpay' },
   });
+  await order.validate(); // Validate in memory; do not persist until Razorpay succeeds.
   let razorpayOrder;
   try {
     razorpayOrder = await paymentClient.orders.create({
@@ -73,6 +74,7 @@ async function createRazorpayOrder(body) {
     if (statusCode === 401 || statusCode === 403) fail('Razorpay authentication failed. Check the server API key configuration.', 503);
     fail('Unable to create the Razorpay order. Please try again later.', 502);
   }
+  if (!razorpayOrder?.id || razorpayOrder.amount !== amount || razorpayOrder.currency !== currency) fail('Invalid response from Razorpay. Please try again later.', 502);
   order.payment.providerOrderId = razorpayOrder.id;
   await order.save();
   emailService.sendOrderCreatedEmail(order).catch(error => {
@@ -91,7 +93,7 @@ async function verifyPayment(body) {
   order.payment.status = 'paid';
   order.payment.transactionId = body.razorpay_payment_id;
   if (!order.payment.paidAt) order.payment.paidAt = new Date();
-  order.status = 'approved';
+  if (order.status === 'pending') order.status = 'approved';
   await order.save();
   emailService.sendOrderStatusEmail(order).catch(error => {
     console.error(`Order status email failed for ${order._id}: ${error.message}`);
@@ -117,8 +119,8 @@ async function handleWebhook(rawBody, signature) {
     order.payment.status = 'paid';
     order.payment.transactionId = payment.id || order.payment.transactionId;
     if (!order.payment.paidAt) order.payment.paidAt = new Date((payment.created_at || Math.floor(Date.now() / 1000)) * 1000);
-    order.status = 'approved';
-  } else if (event.event === 'payment.failed' || payment.status === 'failed') {
+    if (order.status === 'pending') order.status = 'approved';
+  } else if ((event.event === 'payment.failed' || payment.status === 'failed') && order.payment.status !== 'paid') {
     order.payment.status = 'failed';
     order.payment.transactionId = payment.id || order.payment.transactionId;
   }

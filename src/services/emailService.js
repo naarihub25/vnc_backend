@@ -144,8 +144,19 @@ async function sendOrderCreatedEmail(order) {
   return mailer.sendMail(message);
 }
 
+async function sendOrderTrackingOtp(email, otp) {
+  const message = { from: process.env.SMTP_FROM, to: email,
+    subject: 'Your VNUC order tracking OTP',
+    text: `Your order tracking OTP is ${otp}. It expires in 5 minutes. Do not share this code.`,
+  };
+  if (testSender) return testSender(message);
+  const mailer = getTransporter();
+  if (!mailer) return { skipped: true };
+  return mailer.sendMail(message);
+}
+
 function setTestSender(sender) {
   testSender = sender;
 }
 
-module.exports = { sendOrderStatusEmail, sendOrderCreatedEmail, setTestSender };
+module.exports = { sendOrderTrackingOtp, sendOrderStatusEmail, sendOrderCreatedEmail, setTestSender };

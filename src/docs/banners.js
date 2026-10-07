@@ -1,7 +1,7 @@
 const ref = name => ({ $ref: `#/components/schemas/${name}` });
 const properties = {
   title: { type: 'string', minLength: 1, maxLength: 200, example: 'Festive Gifts Sale' },
-  images: { type: 'array', minItems: 1, description: 'Image display order follows array order. PATCH replaces the complete array. URLs only, not file uploads.', items: { type: 'object', additionalProperties: false, required: ['url'], properties: { url: { type: 'string', format: 'uri', maxLength: 2048, example: 'https://example.com/banners/gifts.jpg' }, alt: { type: 'string', maxLength: 200, example: 'Festive gifts collection' } } } },
+  images: { type: 'array', minItems: 1, description: 'Image display order follows array order. PATCH replaces the complete array. Use /api/banners/image-upload-url to upload image files first.', items: { type: 'object', additionalProperties: false, required: ['url'], properties: { url: { type: 'string', format: 'uri', maxLength: 2048, example: 'https://example.com/banners/gifts.jpg' }, alt: { type: 'string', maxLength: 200, example: 'Festive gifts collection' } } } },
   redirectUrl: { type: 'string', maxLength: 2048, example: '/categories/gifts', description: 'HTTP/HTTPS URL or site-relative path starting with /. Shared by all images in this banner.' },
   position: { type: 'string', enum: ['carousal', 'offerBanner'], example: 'carousal' },
   isActive: { type: 'boolean', default: true },
@@ -24,6 +24,26 @@ module.exports = {
     BannerPositions: { type: 'object', properties: { positions: { type: 'array', items: { type: 'object', properties: { value: { type: 'string', enum: ['carousal', 'offerBanner'] }, label: { type: 'string' } } } } } },
   },
   paths: {
+    '/api/banners/image-upload-url': {
+      post: {
+        summary: 'Upload banner images to S3', tags: ['Banners'],
+        description: 'Accepts 1–5 files in the repeated multipart files field, up to 5 MiB each. Backend uploads to S3 and returns images in request order after all uploads succeed. Save the returned images array with the banner. MIME type and actual size are validated; contents are not decoded. Public endpoint, matching banner CRUD.',
+        requestBody: { required: true, content: { 'multipart/form-data': { schema: {
+          type: 'object', required: ['files'], properties: {
+            files: { type: 'array', minItems: 1, maxItems: 5, items: { type: 'string', format: 'binary' } },
+          },
+        } } } },
+        responses: {
+          200: response('Images uploaded', { type: 'object', required: ['images'], properties: {
+            images: { ...properties.images, maxItems: 5 },
+          } }),
+          400: response('Invalid file type, size, count or multipart request', ref('Error')),
+          405: response('Method not allowed', ref('Error')),
+          503: response('Missing S3 configuration or AWS credentials', ref('Error')),
+          500: response('Unable to upload the banner images', ref('Error')),
+        },
+      },
+    },
     '/api/banners/positions': { get: operation('Banner position dropdown options', { result: 'BannerPositions' }) },
     '/api/banners': {
       post: operation('Create banner', { body: 'CreateBanner', status: 201 }),

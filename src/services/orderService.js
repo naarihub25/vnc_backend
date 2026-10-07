@@ -138,6 +138,7 @@ async function updateStatus(id, body) {
   }
   const order = await Order.findById(id);
   if (!order) fail('Order not found', 404);
+  if (order.paymentMethod === 'online' && order.payment.status !== 'paid' && ['approved', 'shipped', 'delivered', 'returned'].includes(body.status)) fail('Online payment must be completed before approving or fulfilling the order', 409);
   order.status = body.status;
   order.statusReason = ['returned', 'cancelled'].includes(body.status) ? reason : '';
   if (body.status === 'shipped') order.logistics = logistics;

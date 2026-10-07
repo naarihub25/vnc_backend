@@ -3,7 +3,7 @@ const assert = require('node:assert/strict');
 const { S3Client } = require('@aws-sdk/client-s3');
 const app = require('../src/app');
 
-test('product backend uploads multiple files and returns ordered images', async t => {
+test('banner backend uploads multiple files and returns ordered images', async t => {
   const keys = ['S3_IMAGE_BUCKET', 'AWS_REGION', 'S3_PUBLIC_BASE_URL'];
   const previous = keys.map(key => process.env[key]);
   t.after(() => keys.forEach((key, i) => { if (previous[i] === undefined) delete process.env[key]; else process.env[key] = previous[i]; }));
@@ -21,7 +21,7 @@ test('product backend uploads multiple files and returns ordered images', async 
   const server = app.listen(0, '127.0.0.1');
   t.after(() => { server.close(); server.closeAllConnections(); });
   await new Promise((resolve, reject) => { server.once('listening', resolve); server.once('error', reject); });
-  const url = `http://127.0.0.1:${server.address().port}/api/products/image-upload-url`;
+  const url = `http://127.0.0.1:${server.address().port}/api/banners/image-upload-url`;
   async function upload({ type = 'image/png', size = 8, field = 'files', count = 1 } = {}) {
     const form = new FormData();
     for (let i = 0; i < count; i++) form.append(field, new Blob([Buffer.alloc(size, 7)], { type }), 'original.png');
@@ -35,7 +35,7 @@ test('product backend uploads multiple files and returns ordered images', async 
     assert.equal(input.ContentType, type);
     assert.equal(input.ContentLength, 8);
     assert.deepEqual(input.Body, Buffer.alloc(8, 7));
-    assert.match(input.Key, new RegExp(`^products/[a-f0-9-]+\\.${extension}$`));
+    assert.match(input.Key, new RegExp(`^banners/[a-f0-9-]+\\.${extension}$`));
     assert.deepEqual(await result.json(), { images: [{ url: `https://test-bucket.s3.ap-south-1.amazonaws.com/${input.Key}`, alt: '' }] });
   }
   process.env.S3_PUBLIC_BASE_URL = 'https://cdn.example.com///';
@@ -63,7 +63,7 @@ test('product backend uploads multiple files and returns ordered images', async 
   failure = new Error('private S3 details');
   const failed = await upload();
   assert.equal(failed.status, 500);
-  assert.deepEqual(await failed.json(), { error: 'Unable to upload the product images.' });
+  assert.deepEqual(await failed.json(), { error: 'Unable to upload the banner images.' });
   failure = undefined;
   let attempts = 0;
   t.mock.method(S3Client.prototype, 'send', async () => {
@@ -72,7 +72,7 @@ test('product backend uploads multiple files and returns ordered images', async 
   });
   const partial = await upload({ count: 3 });
   assert.equal(partial.status, 500);
-  assert.deepEqual(await partial.json(), { error: 'Unable to upload the product images.' });
+  assert.deepEqual(await partial.json(), { error: 'Unable to upload the banner images.' });
   assert.equal(attempts, 2);
   const wrongMethod = await fetch(url);
   assert.equal(wrongMethod.status, 405);
