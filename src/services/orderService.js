@@ -49,6 +49,9 @@ async function create(body) {
   if (body.paymentMethod === 'online') fail('Use the Razorpay create-order API for online payments.');
   const { user, items, currency, subtotal } = await buildOrderData(body);
   const order = await Order.create({ user: user._id, customer: { name: user.name, email: user.email, phone: user.phone }, shippingAddress: user.address.toObject(), items, currency, subtotal, status: 'pending', paymentMethod: body.paymentMethod, payment: { status: 'pending' } });
+  emailService.sendAdminOrderCreatedEmail(order).catch(error => {
+    console.error(`Admin order notification failed for ${order._id}: ${error.message}`);
+  });
   emailService.sendOrderCreatedEmail(order).catch(error => {
     console.error(`Order created email failed for ${order._id}: ${error.message}`);
   });

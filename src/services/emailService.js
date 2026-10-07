@@ -144,6 +144,32 @@ async function sendOrderCreatedEmail(order) {
   return mailer.sendMail(message);
 }
 
+async function sendAdminOrderCreatedEmail(order) {
+  const recipient = process.env.ADMIN_ORDER_EMAIL?.trim();
+  if (!recipient) return { skipped: true, reason: 'admin-email-not-configured' };
+  const message = {
+    from: process.env.SMTP_FROM,
+    to: recipient,
+    subject: `New VNUC order ${order._id}`,
+    text: [
+      'A new order has been created.', '',
+      `Order ID: ${order._id}`,
+      `Order Status: ${order.status}`,
+      `Payment Method: ${order.paymentMethod.toUpperCase()}`,
+      `Payment Status: ${order.payment.status}`,
+      '', `Customer: ${order.customer.name}`,
+      `Email: ${order.customer.email}`, `Phone: ${order.customer.phone}`,
+      '', 'Items:', ...itemLines(order).map(line => `- ${line}`),
+      '', `Subtotal: ${money(order.subtotal, order.currency)}`,
+      '', 'Delivery Address:', ...addressLines(order.shippingAddress),
+    ].join('\n'),
+  };
+  if (testSender) return testSender(message, order);
+  const mailer = getTransporter();
+  if (!mailer) return { skipped: true, reason: 'smtp-not-configured' };
+  return mailer.sendMail(message);
+}
+
 async function sendOrderTrackingOtp(email, otp) {
   const message = { from: process.env.SMTP_FROM, to: email,
     subject: 'Your VNUC order tracking OTP',
@@ -159,4 +185,4 @@ function setTestSender(sender) {
   testSender = sender;
 }
 
-module.exports = { sendOrderTrackingOtp, sendOrderStatusEmail, sendOrderCreatedEmail, setTestSender };
+module.exports = { sendAdminOrderCreatedEmail, sendOrderTrackingOtp, sendOrderStatusEmail, sendOrderCreatedEmail, setTestSender };

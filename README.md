@@ -527,3 +527,10 @@ Validation checks actual size and MIME type, not decoded image contents. Errors:
 Set `ORDER_TRACKING_DEV_OTP=true` to include `otp` in the first response in any environment, including production. This temporarily bypasses proof of email ownership. In that mode SMTP may be unconfigured; when configured, email is still sent. Set the flag to `false` or remove it to hide OTPs and require working SMTP. Delivery failures return 503.
 
 Challenges are stored as salted hashes in MongoDB, expire after five minutes, allow five verification attempts and have a 60-second resend cooldown. Startup creates the unique-email and expiry indexes. Both routes share a process-local limit of 20 requests/IP/15 minutes. OTPs are single-use; another page/request requires a fresh OTP. No order is changed by tracking. Existing public admin list/detail APIs retain their current access policy; this new flow does not secure those older routes.
+
+
+### Admin new-order notifications
+
+Set `ADMIN_ORDER_EMAIL=admin@example.com` alongside the existing SMTP settings. After a COD order is saved, or a Razorpay order is successfully created and saved locally, the backend sends a separate admin email containing the order ID, customer contact details, items, subtotal, delivery address, order status and payment status. Online orders are notified while pending; this email does not mean payment has completed.
+
+Customer confirmation emails continue separately. Missing admin configuration skips the admin notification; email failures are logged and do not fail order creation or prevent the other recipient's notification. Delivery is attempted once in-process, without a durable queue/retry guarantee. Failed Razorpay order creation sends no new-order notification.

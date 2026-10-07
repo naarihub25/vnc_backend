@@ -77,6 +77,9 @@ async function createRazorpayOrder(body) {
   if (!razorpayOrder?.id || razorpayOrder.amount !== amount || razorpayOrder.currency !== currency) fail('Invalid response from Razorpay. Please try again later.', 502);
   order.payment.providerOrderId = razorpayOrder.id;
   await order.save();
+  emailService.sendAdminOrderCreatedEmail(order).catch(error => {
+    console.error(`Admin order notification failed for ${order._id}: ${error.message}`);
+  });
   emailService.sendOrderCreatedEmail(order).catch(error => {
     console.error(`Order created email failed for ${order._id}: ${error.message}`);
   });
