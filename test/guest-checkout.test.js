@@ -27,7 +27,7 @@ test('guest registration and checkout preserve address and use server-side retai
     return attach(user).save();
   });
   t.mock.method(User, 'findById', async id => users.has(String(id)) ? attach(User.hydrate(users.get(String(id)))) : null);
-  t.mock.method(User, 'findOne', filter => ({ select: async () => { const user = [...users.values()].find(u => u.email === filter.email); return user ? User.hydrate(user) : null; } }));
+  t.mock.method(User, 'findOne', filter => ({ select: async () => { const user = [...users.values()].find(u => u.email === filter.email); return user ? attach(User.hydrate(user)) : null; } }));
   const product = new Product({ _id: new mongoose.Types.ObjectId(), name: 'Toy', sku: 'TOY-1', category: new mongoose.Types.ObjectId(), productType: 'Toy', images: [{ url: 'https://example.com/toy.jpg' }], retailPrice: 19.99, stockQuantity: 10 });
   t.mock.method(Product, 'find', async filter => filter._id.$in.some(id => id.toLowerCase() === String(product._id)) ? [product] : []);
   const attachOrder = order => {
@@ -57,7 +57,9 @@ test('guest registration and checkout preserve address and use server-side retai
   assert.equal(created.body.data.email, 'guest@example.com');
   assert.equal(created.body.data.passwordHash, undefined);
   const userId = created.body.data._id;
-  assert.equal((await call('/users/guest', guest)).status, 409);
+  const repeated = await call('/users/guest', guest);
+  assert.equal(repeated.status, 201);
+  assert.equal(repeated.body.data._id, userId);
   assert.equal(users.size, 1);
   assert.equal((await call('/auth/login', { email: 'guest@example.com', password: 'anything' })).status, 401);
   const orderBody = { userId, paymentMethod: 'cod', items: [{ productId: String(product._id), quantity: 3 }] };
@@ -126,6 +128,14 @@ test('guest registration and checkout preserve address and use server-side retai
   assert.equal((await call('/orders/' + orderId, undefined, 'GET')).body.data.status, 'pending');
 
   assert.equal((await call('/users/' + userId, { address: { ...address(), line1: 'New address' } }, 'PATCH')).status, 200);
+  const returning = await call('/users/guest', { ...guest, name: 'Returning Customer', phone: '9876543211', address: { ...address(), line1: 'Returning address' } });
+  assert.equal(returning.status, 201);
+  assert.equal(returning.body.data._id, userId);
+  assert.equal(returning.body.data.name, 'Returning Customer');
+  assert.equal(returning.body.data.phone, '9876543211');
+  assert.equal(returning.body.data.address.line1, 'Returning address');
+  assert.equal(users.size, 1);
+  assert.equal(orders[0].customer.name, 'Customer');
   assert.equal(orders[0].shippingAddress.line1, '12 MG Road');
   assert.equal((await call('/orders', { ...orderBody, subtotal: 1 })).status, 400);
   assert.equal((await call('/orders', { ...orderBody, items: [{ ...orderBody.items[0], price: 1 }] })).status, 400);
@@ -139,8 +149,11 @@ test('guest registration and checkout preserve address and use server-side retai
   assert.equal((await call('/orders', orderBody)).status, 409);
   product.isRetail = true;
   users.get(userId).isActive = false;
+  assert.equal((await call('/users/guest', guest)).status, 403);
   assert.equal((await call('/orders', orderBody)).status, 403);
   users.get(userId).isActive = true; users.get(userId).role = 'admin';
+  assert.equal((await call('/users/guest', guest)).status, 409);
+  assert.equal(users.get(userId).role, 'admin');
   assert.equal((await call('/orders', orderBody)).status, 403);
   assert.equal((await call('/orders', { ...orderBody, userId: '000000000000000000000000' })).status, 404);
   assert.equal(orders.length, 1);

@@ -281,7 +281,7 @@ MongoDB performs matching and pagination; category descendants are resolved with
 }
 ```
 
-Returns HTTP 201 with `{ flag: true, data: user }`. The frontend retains `data._id` and navigates to its checkout page. Country is a two-letter code; line2 is optional. Duplicate emails return 409 without replacing or converting an existing user. Reuse a previously created guest ID for another checkout; there is no email-based account recovery or automatic merge. Guest users cannot log in through either password-login endpoint. Edit delivery details with `PATCH /api/users/:id` and a complete `address` object.
+Returns HTTP 201 with `{ flag: true, data: user }`. The frontend retains `data._id` and navigates to its checkout page. Country is a two-letter code; line2 is optional. Repeat guest checkout with the same normalized email reuses the existing active guest ID and updates name, phone and address. Previously saved order snapshots stay unchanged. Registered-account emails return 409 and inactive guests return 403. The unique email index remains to prevent duplicate records, including simultaneous requests. The response stays HTTP 201 with `{ flag: true, data: user }` for both new and reused guests. Guest users cannot log in through either password-login endpoint. Edit delivery details with `PATCH /api/users/:id` and a complete `address` object.
 
 To submit checkout, call `POST /api/orders`:
 
